@@ -9,7 +9,7 @@ class Rettle
     def read
       size = @r.readline.chomp.to_i
       mstr = @r.read(size)
-      Marshal.load(mstr)
+      Marshal.load([mstr].pack("h*"))
     rescue EOFError
       # read was closed
       nil
@@ -22,7 +22,7 @@ class Rettle
 
     # write to file descriptor
     def write(data)
-      mdata = Marshal.dump(data)
+      mdata = Marshal.dump(data).unpack("h*")[0]
       @w.write mdata.size
       @w.write "\n"
       @w.flush
