@@ -1,2 +1,2 @@
-# rettle
-Simple ETL for Ruby
+# Rettle
+Rettle is simple ETL for Ruby
