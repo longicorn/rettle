@@ -1,9 +1,12 @@
 class Rettle
   class Task
-    def initialize
+    def initialize(type:, name:)
+      @type = type
+      @name = name
       @r, @w = IO.pipe
     end
-    attr_accessor :next_task
+    attr_reader :name
+    attr_accessor :proc
 
     # read from file descriptor
     def read
@@ -15,9 +18,14 @@ class Rettle
       nil
     end
 
-    # read from before task
-    def recv
-      read
+    def each_recv
+      if block_given?
+        while true do
+          data = read
+          break if data.nil?
+          yield data
+        end
+      end
     end
 
     # write to file descriptor
@@ -30,34 +38,22 @@ class Rettle
       @w.flush
     end
 
-    # write from next task
     def send(data)
-      next_task.write(data)
+      write(data)
     end
 
     def close
       @w.close
     end
 
-    def finish
-      next_task&.close
-    end
-
-    def process
-      @proc = lambda do
-        yield self
-        finish
-      end
-    end
-
     def run
       @thread = Thread.new do
         @proc.call
-      end
+      end if @proc
     end
 
     def join
-      @thread.join
+      @thread&.join
     end
   end
 end
