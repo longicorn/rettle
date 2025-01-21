@@ -1,17 +1,21 @@
+require_relative "network"
+
 class Rettle
   class Task
     def initialize(type:, name:)
       @type = type
       @name = name
-      @r, @w = IO.pipe
+      # extract task is not recv
+      @network = Network.new(type: :pipe) if type != :extract
     end
-    attr_reader :name
+    attr_reader :name, :network
     attr_accessor :proc
 
     # read from file descriptor
     def read
-      size = @r.readline.chomp.to_i
-      mstr = @r.read(size)
+      fd = @network.read_fd
+      size = fd.readline.chomp.to_i
+      mstr = fd.read(size)
       Marshal.load([mstr].pack("h*"))
     rescue EOFError
       # read was closed
@@ -31,11 +35,12 @@ class Rettle
     # write to file descriptor
     def write(data)
       mdata = Marshal.dump(data).unpack("h*")[0]
-      @w.write mdata.size
-      @w.write "\n"
-      @w.flush
-      @w.write mdata
-      @w.flush
+      fd = @network.write_fd
+      fd.write mdata.size
+      fd.write "\n"
+      fd.flush
+      fd.write mdata
+      fd.flush
     end
 
     def send(data)
@@ -43,7 +48,7 @@ class Rettle
     end
 
     def close
-      @w.close
+      @network.write_fd.close
     end
 
     def run

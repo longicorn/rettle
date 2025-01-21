@@ -22,16 +22,17 @@ class Rettle
     end
   end
 
-  def socket(task_names)
-    tasks = task_names.map{|name| @tasks[name]}
+  def connect(task_names)
+    tasks = task_names.each_with_object({}){|name, hash| hash[name] = @tasks[name]}
     if block_given?
       yield tasks
-      tasks.each(&:close)
+      tasks.values.each(&:close)
     end
   end
 
   def send(name, data)
     task = @tasks[name]
+    task.connect
     task.write(data)
   end
 
