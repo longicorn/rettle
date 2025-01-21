@@ -4,28 +4,40 @@ require_relative "rettle/version"
 require_relative "rettle/task"
 
 class Rettle
-  attr_accessor :extract, :transforms, :load
+  def initialize
+    @tasks = {}
+  end
 
-  def setup
-    # set pipeline
-    @pipeline = []
-    @pipeline << @extract
-    @pipeline << @transforms
-    @pipeline << @load
-    @pipeline = @pipeline.flatten.compact
+  def process(type, name)
+    task = Task.new(type: type, name: name)
+    raise "Task #{name} already exists" if @tasks.key?(name)
+    @tasks[name] = task
 
-    # set next task
-    @pipeline.each_cons(2) do |before, after|
-      before.next_task = after
+    if block_given?
+      task.proc = lambda do
+        yield task
+      end
+    else
+      task
     end
   end
 
-  def run
-    setup
-    @pipeline.each(&:run)
+  def connect(task_names)
+    tasks = task_names.each_with_object({}){|name, hash| hash[name] = @tasks[name]}
+    if block_given?
+      yield tasks
+      tasks.values.each(&:close)
+    end
   end
 
-  def join
-    @pipeline.each(&:join)
+  def send(name, data)
+    task = @tasks[name]
+    task.connect
+    task.write(data)
+  end
+
+  def run
+    @tasks.values.each(&:run)
+    @tasks.values.each(&:join)
   end
 end

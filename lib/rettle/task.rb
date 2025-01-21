@@ -1,63 +1,64 @@
+require_relative "network"
+
 class Rettle
   class Task
-    def initialize
-      @r, @w = IO.pipe
+    def initialize(type:, name:)
+      @type = type
+      @name = name
+      # extract task is not recv
+      @network = Network.new(type: :pipe) if type != :extract
     end
-    attr_accessor :next_task
+    attr_reader :name, :network
+    attr_accessor :proc
 
     # read from file descriptor
     def read
-      size = @r.readline.chomp.to_i
-      mstr = @r.read(size)
+      fd = @network.read_fd
+      size = fd.readline.chomp.to_i
+      mstr = fd.read(size)
       Marshal.load([mstr].pack("h*"))
     rescue EOFError
       # read was closed
       nil
     end
 
-    # read from before task
-    def recv
-      read
+    def each_recv
+      if block_given?
+        while true do
+          data = read
+          break if data.nil?
+          yield data
+        end
+      end
     end
 
     # write to file descriptor
     def write(data)
       mdata = Marshal.dump(data).unpack("h*")[0]
-      @w.write mdata.size
-      @w.write "\n"
-      @w.flush
-      @w.write mdata
-      @w.flush
+      fd = @network.write_fd
+      fd.write mdata.size
+      fd.write "\n"
+      fd.flush
+      fd.write mdata
+      fd.flush
     end
 
-    # write from next task
     def send(data)
-      next_task.write(data)
+      write(data)
     end
 
     def close
-      @w.close
-    end
-
-    def finish
-      next_task&.close
-    end
-
-    def process
-      @proc = lambda do
-        yield self
-        finish
-      end
+      @network.write_fd.close
     end
 
     def run
       @thread = Thread.new do
         @proc.call
-      end
+      end if @proc
     end
 
     def join
-      @thread.join
+      @thread&.join
     end
   end
 end
