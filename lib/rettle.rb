@@ -23,7 +23,7 @@ class Rettle
   end
 
   def connect(task_names)
-    tasks = task_names.each_with_object({}){|name, hash| hash[name] = @tasks[name]}
+    tasks = Array(task_names).each_with_object({}){|name, hash| hash[name] = @tasks[name]}
     if block_given?
       yield tasks
       tasks.values.each(&:close)
