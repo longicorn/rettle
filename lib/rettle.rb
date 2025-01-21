@@ -32,7 +32,6 @@ class Rettle
 
   def send(name, data)
     task = @tasks[name]
-    task.connect
     task.write(data)
   end
 
