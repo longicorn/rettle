@@ -49,6 +49,8 @@ etl.process(:load, 'load_task') do
     puts row
   end
 end
+
+etl.run
 ```
 
 ### Simple Example2
@@ -107,4 +109,6 @@ etl.process(:load, 'load_task2') do
     puts row
   end
 end
+
+etl.run
 ```
