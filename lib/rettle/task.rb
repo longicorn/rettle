@@ -1,4 +1,5 @@
 require_relative "network"
+require_relative "task_common"
 require_relative "task_extract"
 require_relative "task_transform"
 require_relative "task_load"
@@ -13,6 +14,8 @@ class Rettle
 
       type_name = type.to_s[0].upcase + type.to_s[1..]
       class_name = Object.const_get("::Rettle::Task#{type_name}")
+      self.class.send(:include, class_name)
+      class_name = Object.const_get("::Rettle::TaskCommon")
       self.class.send(:include, class_name)
     end
     attr_reader :name, :network
