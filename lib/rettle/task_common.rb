@@ -1,4 +1,5 @@
 require 'tempfile'
+require 'kconv'
 
 class Rettle
   module TaskCommon
