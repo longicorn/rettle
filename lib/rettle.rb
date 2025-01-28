@@ -6,8 +6,16 @@ require_relative "rettle/task"
 class Rettle
   def initialize
     @tasks = {}
+    @setup_proc
   end
 
+  def setup
+    if block_given?
+      @setup_proc = lambda do
+        yield
+      end
+    end
+  end
   def process(type, name)
     task = Task.new(type: type, name: name)
     raise "Task #{name} already exists" if @tasks.key?(name)
@@ -36,6 +44,7 @@ class Rettle
   end
 
   def run
+    @setup_proc&.call
     @tasks.values.each(&:run)
     @tasks.values.each(&:join)
   end
