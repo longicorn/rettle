@@ -69,9 +69,10 @@ class Rettle
 
     def run
       @thread = Thread.new do
-        sleep 1
         @proc.call
-      rescue
+      rescue => e
+        p e
+        puts e.backtrace.join("\n")
         @watchdog_fd.write("1")
         @watchdog_fd.flush
       end if @proc
