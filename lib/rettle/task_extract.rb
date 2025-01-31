@@ -8,7 +8,7 @@ class Rettle
     def after_download(file_name)
       case `file #{file_name}`
       when /Zip archive data/io
-        ret = `unzip #{file_name}`
+        ret = `unzip -uo #{file_name}`
         ret.lines.select{|v|v.match?(/inflating:/)}.map{|v|v.strip.split(':')[-1].strip}
       else
         file_name
