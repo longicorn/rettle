@@ -6,7 +6,7 @@ require_relative "rettle/task"
 class Rettle
   def initialize
     @tasks = {}
-    @setup_proc
+    setup_watchdog
   end
 
   def setup
@@ -16,8 +16,9 @@ class Rettle
       end
     end
   end
+
   def process(type, name)
-    task = Task.new(type: type, name: name)
+    task = Task.new(type: type, name: name, watchdog_fd: @wdw)
     raise "Task #{name} already exists" if @tasks.key?(name)
     @tasks[name] = task
 
@@ -47,5 +48,19 @@ class Rettle
     @setup_proc&.call
     @tasks.values.each(&:run)
     @tasks.values.each(&:join)
+    @watchdog.kill if @watchdog.alive?
+    @watchdog.join
+  end
+
+  private
+
+  def setup_watchdog
+    @wdr, @wdw = IO.pipe
+    @watchdog = Thread.new do
+      rs, _, = IO.select([@wdr])
+      if r = rs[0]
+        @tasks.values.each(&:kill)
+      end
+    end
   end
 end
