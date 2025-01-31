@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 require_relative "network"
 require_relative "task_common"
 require_relative "task_extract"

@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 class Rettle
   class Network
     def initialize(type: :pipe)
