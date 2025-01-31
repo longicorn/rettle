@@ -1,7 +1,7 @@
 PATH
   remote: .
   specs:
-    rettle (0.3.4)
+    rettle (0.3.5)
       nkf
 
 GEM
