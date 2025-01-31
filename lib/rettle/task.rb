@@ -3,12 +3,16 @@ require_relative "task_common"
 require_relative "task_extract"
 require_relative "task_transform"
 require_relative "task_load"
+require 'forwardable'
 
 class Rettle
   class Task
-    def initialize(type:, name:)
+    extend Forwardable
+
+    def initialize(type:, name:, watchdog_fd:)
       @type = type
       @name = name
+      @watchdog_fd = watchdog_fd
       # extract task is not recv
       @network = Network.new(type: :pipe) if type != :extract
 
@@ -63,12 +67,15 @@ class Rettle
 
     def run
       @thread = Thread.new do
+        sleep 1
         @proc.call
+      rescue
+        @watchdog_fd.write("1")
+        @watchdog_fd.flush
       end if @proc
     end
 
-    def join
-      @thread&.join
-    end
+    delegate join: :@thread
+    delegate kill: :@thread
   end
 end
