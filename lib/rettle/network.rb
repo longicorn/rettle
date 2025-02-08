@@ -2,7 +2,7 @@
 
 class Rettle
   class Network
-    def initialize(type: :pipe)
+    def initialize(type: :queue)
       @type = type
       server_open
     end
@@ -23,6 +23,8 @@ class Rettle
         size = fd.readline.chomp.to_i
         mstr = fd.read(size)
         Marshal.load([mstr].pack("h*"))
+      when :queue
+        @fds.pop
       end
     rescue EOFError
       nil
@@ -38,6 +40,8 @@ class Rettle
         fd.flush
         fd.write mdata
         fd.flush
+      when :queue
+        @fds.push(data)
       end
     end
 
@@ -45,6 +49,8 @@ class Rettle
       case @type
       when :pipe
         @fds[1].close
+      when :queue
+        @fds.close
       end
     end
   end
