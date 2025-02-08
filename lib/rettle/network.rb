@@ -1,7 +1,11 @@
 # frozen_string_literal: true
 
+require 'thread'
+
 class Rettle
   class Network
+    QUEUE_SIZE = 256
+
     def initialize(type: :queue)
       @type = type
       server_open
@@ -12,7 +16,7 @@ class Rettle
       when :pipe
         @fds = IO.pipe
       when :queue
-        @fds = Queue.new
+        @fds = SizedQueue.new(QUEUE_SIZE)
       end
     end
 
