@@ -11,20 +11,40 @@ class Rettle
       case @type
       when :pipe
         @fds = IO.pipe
+      when :queue
+        @fds = Queue.new
       end
     end
 
-    def read_fd
+    def read
       case @type
       when :pipe
-        @fds[0]
+        fd = @fds[0]
+        size = fd.readline.chomp.to_i
+        mstr = fd.read(size)
+        Marshal.load([mstr].pack("h*"))
+      end
+    rescue EOFError
+      nil
+    end
+
+    def write(data)
+      case @type
+      when :pipe
+        mdata = Marshal.dump(data).unpack("h*")[0]
+        fd = @fds[1]
+        fd.write mdata.size
+        fd.write "\n"
+        fd.flush
+        fd.write mdata
+        fd.flush
       end
     end
 
-    def write_fd
+    def close
       case @type
       when :pipe
-        @fds[1]
+        @fds[1].close
       end
     end
   end
