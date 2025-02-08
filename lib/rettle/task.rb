@@ -11,12 +11,12 @@ class Rettle
   class Task
     extend Forwardable
 
-    def initialize(type:, name:, watchdog_fd:)
+    def initialize(type:, name:, network: :queue, watchdog_fd:)
       @type = type
       @name = name
       @watchdog_fd = watchdog_fd
       # extract task is not recv
-      @network = Network.new(type: :pipe) if type != :extract
+      @network = Network.new(type: network) if type != :extract
 
       type_name = type.to_s[0].upcase + type.to_s[1..]
       class_name = Object.const_get("::Rettle::Task#{type_name}")

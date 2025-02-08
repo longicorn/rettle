@@ -4,8 +4,9 @@ require_relative "rettle/version"
 require_relative "rettle/task"
 
 class Rettle
-  def initialize
+  def initialize(network: :queue)
     @tasks = {}
+    @network = network
     setup_watchdog
   end
 
@@ -18,7 +19,7 @@ class Rettle
   end
 
   def process(type, name)
-    task = Task.new(type: type, name: name, watchdog_fd: @wdw)
+    task = Task.new(type: type, name: name, network: @network, watchdog_fd: @wdw)
     raise "Task #{name} already exists" if @tasks.key?(name)
     @tasks[name] = task
 
