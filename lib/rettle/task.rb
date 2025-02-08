@@ -27,17 +27,6 @@ class Rettle
     attr_reader :name, :network
     attr_accessor :proc
 
-    # read from file descriptor
-    def read
-      fd = @network.read_fd
-      size = fd.readline.chomp.to_i
-      mstr = fd.read(size)
-      Marshal.load([mstr].pack("h*"))
-    rescue EOFError
-      # read was closed
-      nil
-    end
-
     def each_recv
       if block_given?
         while true do
@@ -48,23 +37,8 @@ class Rettle
       end
     end
 
-    # write to file descriptor
-    def write(data)
-      mdata = Marshal.dump(data).unpack("h*")[0]
-      fd = @network.write_fd
-      fd.write mdata.size
-      fd.write "\n"
-      fd.flush
-      fd.write mdata
-      fd.flush
-    end
-
     def send(data)
       write(data)
-    end
-
-    def close
-      @network.write_fd.close
     end
 
     def run
@@ -78,6 +52,9 @@ class Rettle
       end if @proc
     end
 
+    delegate read: :@network
+    delegate write: :@network
+    delegate close: :@network
     delegate join: :@thread
     delegate kill: :@thread
   end
