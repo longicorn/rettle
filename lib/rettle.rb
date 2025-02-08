@@ -50,6 +50,12 @@ class Rettle
     @tasks.values.each(&:join)
     @watchdog.kill if @watchdog.alive?
     @watchdog.join
+  rescue Interrupt
+    exit
+  rescue => e
+    p e
+    puts e.backtrace.join("\n")
+    exit
   end
 
   private
