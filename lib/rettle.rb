@@ -18,7 +18,7 @@ class Rettle
     end
   end
 
-  def process(type, name)
+  def define_task(type, name)
     task = Task.new(type: type, name: name, network: @network, watchdog_fd: @wdw)
     raise "Task #{name} already exists" if @tasks.key?(name)
     @tasks[name] = task
