@@ -49,6 +49,20 @@ class Rettle
       end
     end
 
+    def git_clone(url: url, dir: nil)
+      FileUtils.mkdir_p(dir)
+      repo = url.split('/').last.split('.').first
+      Dir.chdir(dir) do
+        `git clone #{url} 1>/dev/null 2>&1` unless Dir.exist?(repo)
+        Dir.chdir(repo) do
+          `git pull 1>/dev/null 2>&1`
+        end
+      end
+
+      path = File.join(dir, repo)
+      Pathname.new(path)
+    end
+
     private
 
     def default_downloader(url:, dir:)
