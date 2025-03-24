@@ -36,7 +36,8 @@ class Rettle
           raise if url.nil?
           pathname = default_downloader(url: url, dir: dir)
         end
-         download_files = after_download(pathname)
+          download_files = after_download(pathname)
+          FileUtils.chmod_R('+w', './')
       end
 
       case download_files
