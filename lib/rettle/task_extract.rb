@@ -8,10 +8,10 @@ class Rettle
   module TaskExtract
     class UndefinedError < StandardError; end
 
-    def after_download(pathname)
+    def after_download(pathname, dir: dir)
       case `file #{pathname.to_s}`
       when /Zip archive data/io
-        ret = `unzip -o #{pathname.to_s}`
+        ret = `unzip -o #{pathname.to_s} 2>/dev/null`
         ret.lines.select{|v|v.match?(/inflating:/)}.map{|v|v.strip.split(':')[-1].strip}
       else
         pathname.to_s
@@ -31,13 +31,17 @@ class Rettle
       download_files = nil
       Dir.chdir(dir) do
         begin
-          pathname = downloader(url: url, dir: dir)
+          pathnames = downloader(url: url, dir: dir)
         rescue UndefinedError
           raise if url.nil?
-          pathname = default_downloader(url: url, dir: dir)
+          pathnames = default_downloader(url: url, dir: dir)
         end
-          download_files = after_download(pathname)
-          FileUtils.chmod_R('+w', './')
+
+        download_files = []
+        pathnames.each do |pathname|
+          download_files += after_download(pathname, dir: dir)
+        end
+        FileUtils.chmod_R('+w', './')
       end
 
       case download_files
@@ -71,7 +75,7 @@ class Rettle
       uri = URI(url)
       data = Net::HTTP.get(uri)
       File.open(file_name, 'w+b'){|f|f.write(data)}
-      Pathname.new(file_name)
+      [Pathname.new(file_name)]
     end
   end
 end
