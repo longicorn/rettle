@@ -113,8 +113,20 @@ end
 etl.run
 ```
 
-## Task Helper
+## Rettle Helper
 
+## setup
+
+`setup` executes all Tasks before starting them
+
+```ruby
+etl = Rettle.new
+etl.setup do
+  FileUtils.mkdir_p('dir/path')
+end
+```
+
+## Task Helper
 ### Extract
 #### download
 
@@ -125,8 +137,8 @@ etl = Rettle.new
 
 etl.define_task(:extract, 'extract_task') do |task|
   csv_url = '/url/to/csv/file.csv'
-  csv_path = task.download(url: csv_url, dir: '/save/to/dir')
-  CSV.foreach(csv_path) do |row|
+  csv_paths = task.download(url: csv_url, dir: '/save/to/dir')
+  CSV.foreach(csv_paths[0]) do |row|
     p row
   end
 end
@@ -145,8 +157,8 @@ etl.define_task(:extract, 'extract_task') do |task|
 
   # files => ['hoge.csv', 'hoge.asc']
   files = task.download(url: zip_url, dir: '/save/to/dir')
-  csv_path = files.detect(/.*\.csv/)
-  CSV.foreach(csv_path) do |row|
+  csv_paths = files.detect(/.*\.csv/)
+  CSV.foreach(csv_paths[0]) do |row|
     p row
   end
 end
@@ -163,10 +175,10 @@ etl.define_task(:extract, 'extract_task') do |task|
   def task.downloader
     # scraping code
     # ...
-    return file_path
+    return [file_path]
   end
 
-  file_path = task.download(url: zip_url, dir: '/save/to/dir')
+  file_path = task.download(url: zip_url, dir: '/save/to/dir')[0]
   # ...
 end
 ```
@@ -174,6 +186,9 @@ end
 ### Load
 
 #### export
+'export' caches the data and calls 'exporter' when it reaches a certain amount, to output the data to a file, etc.
+The 'exporter' must be defined by the user.
+
 ```ruby
 etl = Rettle.new
 
@@ -197,6 +212,7 @@ end
 
 # rewrite code
 etl.define_task(:load, 'load_task') do |task|
+  # 'data' is cached data
   def task.exporter(data)
     ActiveRecord::Base.transaction do
       data.each(&:save!)
@@ -205,7 +221,8 @@ etl.define_task(:load, 'load_task') do |task|
 
   array = []
   task.each_recv do |row|
-    task.export(data: row)
+    # size is buffer size. default is 1000
+    task.export(data: row, size: 2000)
   end
   task.export(flush: true)
 end
