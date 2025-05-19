@@ -28,7 +28,7 @@ class Rettle
       FileUtils.rm_rf(dir) if cleanup
       FileUtils.mkdir_p(dir)
 
-      download_files = nil
+      download_files = []
       Dir.chdir(dir) do
         begin
           pathnames = downloader(url: url, dir: dir)
@@ -37,21 +37,13 @@ class Rettle
           pathnames = default_downloader(url: url, dir: dir)
         end
 
-        download_files = []
         pathnames.each do |pathname|
-          download_files += after_download(pathname, dir: dir)
+          download_files << after_download(pathname, dir: dir)
         end
         FileUtils.chmod_R('+w', './')
       end
 
-      case download_files
-      when Array
-        download_files.map{|f| File.join(dir, f)}
-      when String
-        File.join(dir, download_files)
-      else
-        nil
-      end
+      return download_files.flatten.compact.map{|f| File.join(dir, f)}
     end
 
     def git_clone(url: url, dir: nil)
