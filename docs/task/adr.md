@@ -13,10 +13,12 @@
 
 Rettle is a code-first ETL framework in Ruby. An ETL pipeline consists of discrete data ingestion, transformation, and export steps arranged as a directed acyclic graph.
 
-In defining the `Rettle::Task` subsystem, we must address three fundamental architectural challenges:
+In defining and refining the `Rettle::Task` subsystem, we must address key architectural requirements:
 1. **Concurrency and Extensibility**: How can task execution remain decoupled from the underlying concurrency mechanism (threads, processes, or actors) while preserving a clean, uniform DSL for pipeline developers?
 2. **Backpressure and Streaming Communication**: How should tasks transfer streaming data records without risking unbounded memory growth or complex synchronization protocols?
-3. **Supervision and Error Semantics**: How should failures in concurrently running tasks be detected and handled to maintain data consistency across the pipeline?
+3. **Supervision and Library-Friendly Error Semantics**: How should failures in concurrently running tasks be detected and propagated to enclosing application frameworks (e.g., ActiveJob, Solid Queue, Rake) without process abortion?
+4. **Thread Safety and Process-Global State Hygiene**: How can task helpers perform file, network, and archive operations concurrently without mutating process-wide state (such as `Dir.pwd`)?
+5. **Streaming Downloader and Cache Strategy**: How should large data sources be fetched reliably without unbounded memory usage or redundant network transfers?
 
 ---
 
@@ -26,7 +28,9 @@ In defining the `Rettle::Task` subsystem, we must address three fundamental arch
 | :--- | :--- | :--- |
 | **Execution Model** | Abstract Processing Unit with Pluggable Backend (Current: `Thread`) | Decouples task logic from concurrency; enables future multi-process (`fork`) or `Ractor` execution without changing pipeline DSL. |
 | **Data Flow & Backpressure** | Bounded Channel via `Rettle::Network` (`SizedQueue` / `IO.pipe`) | Enforces backpressure naturally by blocking upstream senders; prevents out-of-memory errors on high-throughput streams. |
-| **Pipeline Supervision** | Fail-Fast IPC Watchdog Pipe | Immediate, atomic abort of the entire pipeline upon any task failure to prevent corrupted or partial data ingestion. |
+| **Pipeline Supervision & Errors** | Fail-Fast IPC Watchdog Pipe with Re-raised Exceptions | Immediate abort of peer tasks upon failure and propagation of the original exception to caller without invoking `Kernel.exit`. |
+| **Thread Safety & State Hygiene** | Complete Elimination of `Dir.chdir` and Class Mutation | Avoids process-global race conditions in multi-threaded workers (Solid Queue); attaches helpers via instance `extend`. |
+| **Downloader & Ingestion** | Chunked Disk Streaming with Redirects, Retries & Conditional Cache | Prevents OOM crashes on multi-gigabyte downloads; handles network flakiness; skips redundant processing via 304 Not Modified. |
 
 ---
 
@@ -62,7 +66,7 @@ Pipelines stream data continuously from extract tasks through multiple transform
 
 #### Decision
 All inter-task communication is abstracted through the `Rettle::Network` channel layer:
-1. **Bounded Buffer**: By default, in-memory channels utilize Ruby's `SizedQueue` with a fixed buffer size (`QUEUE_SIZE = 256`).
+1. **Bounded Buffer**: By default, in-memory channels utilize Ruby's `SizedQueue` with a fixed buffer size (`QUEUE_SIZE = 256`, configurable).
 2. **Automatic Backpressure**: When a downstream queue reaches capacity, the destination task's `Task#send` call blocks automatically until space becomes available.
 3. **IPC Channel Support**: For scenarios spanning process boundaries or file-descriptor-based communication, `Network` provides an alternative `:pipe` mode using Unix `IO.pipe` with hex-encoded `Marshal` serialization.
 4. **Lifecycle Signaling**: Upstream tasks signal stream completion by closing downstream network channels upon exiting their execution block, which delivers an explicit end-of-stream signal (`nil`) to downstream `Task#each_recv` iterators.
@@ -77,24 +81,76 @@ All inter-task communication is abstracted through the `Rettle::Network` channel
 
 ---
 
-### 3.3 Decision 3: Fail-Fast Supervision via IPC Watchdog Pipe
+### 3.3 Decision 3: Fail-Fast Supervision via IPC Watchdog Pipe with Library Exception Propagation
 
 #### Context
-In a distributed or concurrent ETL pipeline, if an individual task fails (e.g., due to an unhandled exception or parsing error) while other tasks continue running, downstream tasks may receive partial data, or upstream tasks may run indefinitely, leaving external data stores in an inconsistent or partially loaded state.
+In a distributed or concurrent ETL pipeline, if an individual task fails while peer tasks continue running, downstream tasks may receive partial data, or upstream tasks may run indefinitely, leaving external data stores in an inconsistent state. Furthermore, when Rettle is embedded inside application background workers (such as ActiveJob or Solid Queue), terminating via `exit` kills the entire worker process and prevents retry mechanisms or error tracking from functioning.
 
 #### Decision
-Rettle implements a fail-fast supervision model mediated by an IPC watchdog pipe:
-1. **Watchdog File Descriptor**: A dedicated IPC pipe (`@watchdog_fd`) is initialized at pipeline startup and passed to all tasks.
-2. **Immediate Alerting**: If an unhandled exception occurs inside any task's execution block, the task catches the error, writes an alert flag (`"1"`) to the watchdog pipe, and retains the exception.
-3. **Fail-Fast Termination**: The main supervisor monitors the watchdog pipe. Upon receiving an alert signal, it immediately terminates the entire pipeline (killing active threads/processes) and re-raises the original exception to the caller, ensuring that no further partial data processing occurs.
+Rettle implements a fail-fast supervision model mediated by an IPC watchdog pipe with full exception propagation:
+1. **Watchdog File Descriptor**: A dedicated IPC pipe (`@watchdog_fd`) is passed to all tasks upon pipeline initialization.
+2. **Immediate Alerting**: When an unhandled exception occurs inside any task's execution block, the task catches the error, writes an alert flag (`"1"`) to the watchdog pipe, and retains the exception instance.
+3. **Fail-Fast Termination & Re-raising**: The main supervisor monitors the watchdog pipe. Upon receiving an alert signal, it immediately halts peer tasks (killing active threads/processes) and re-raises the original exception to the caller of `Rettle#run` / `run!`.
+4. **No Library `exit`**: The library avoids invoking `Kernel.exit`, behaving as a well-disciplined Ruby library that yields failure control to the enclosing application.
 
 #### Consequences
 * **Positive**:
   * Prevents corrupted or partial ETL runs from committing silent inconsistencies to external systems.
+  * Integrates seamlessly with Rails / ActiveJob retry policies, error monitoring (Sentry, Honeybadger), and test suites.
   * Works uniformly across thread and process execution boundaries using standard Unix file descriptors.
-  * Simple, deterministic failure semantics.
 * **Negative / Trade-offs**:
-  * Does not support isolated task retry inside the running pipeline; a task failure aborts the pipeline run, requiring pipeline-level orchestration/retry.
+  * Does not support isolated in-flight task retry inside the running pipeline; a task failure aborts the pipeline run, delegating retry to the pipeline orchestration layer.
+
+---
+
+### 3.4 Decision 4: Thread Safety and Process-Global State Hygiene
+
+#### Context
+In concurrent Ruby environments—especially multi-threaded background job workers like Solid Queue or parallel test runners—the current working directory (`Dir.pwd`) is a process-global resource shared by all threads.
+Previously, `TaskExtract#download` and `TaskExtract#git_clone` used `Dir.chdir(dir)`. When multiple jobs execute concurrently in different threads of the same process, altering `Dir.chdir` causes catastrophic race conditions, corrupting relative path resolution across independent jobs. Furthermore, including helper modules at the class level (`Task.include`) pollutes the `Task` class across instances.
+
+#### Decision
+1. **Elimination of `Dir.chdir`**: Completely remove all invocations of `Dir.chdir` across `TaskExtract#download`, `after_download`, and `git_clone`.
+2. **Explicit Directory Targeting**:
+   * File operations must compute full paths explicitly using `File.join(dir, ...)`.
+   * Git operations must use the directory flag `git -C <dir>` rather than changing directories before running git commands.
+   * Archive decompression (ZIP, `.tar.gz`) must extract directly into the target directory without modifying the process working directory.
+3. **Instance-Level Module Attachment**: Attach type-specific behavior dynamically to individual task instances via `extend` in `Task#initialize`, ensuring zero class-level mutation or pollution.
+
+#### Consequences
+* **Positive**:
+  * Full thread safety when running multiple concurrent pipelines within a single multi-threaded process.
+  * Safe for integration into Solid Queue, Sidekiq, and parallel test runners.
+  * Clean object model without class pollution.
+* **Negative / Trade-offs**:
+  * All external commands and path resolutions must be authored with explicit destination flags.
+
+---
+
+### 3.5 Decision 5: Robust Streaming Downloader and Cache Strategy
+
+#### Context
+The default downloader initially relied on `Net::HTTP.get(uri)`, which reads the entire response into an in-memory string. For large ETL datasets (hundreds of megabytes to gigabytes), this leads to high memory spikes and out-of-memory (OOM) process kills. Additionally, network instability, HTTP redirects (e.g., S3 pre-signed URLs returning 301/302), and redundant re-downloading of unchanged datasets posed reliability and performance issues.
+
+#### Decision
+1. **Disk Streaming**: Implement `default_downloader` using `Net::HTTP` chunked streaming (`request_get` + `read_body`) writing directly to temporary and target files, maintaining a near-zero memory footprint regardless of file size.
+2. **Network Resilience**:
+   * Automatically follow HTTP redirects (301, 302, 307, 308) up to a configurable maximum limit (e.g., 5 hops).
+   * Support explicit open and read timeouts.
+   * Provide simple retry logic for transient network glitches.
+3. **Conditional Requests & Metadata Extraction**:
+   * Collect and return download metadata (e.g., `etag`, `last_modified`, `content_length`, `sha256`).
+   * Support conditional HTTP requests using `If-None-Match` and `If-Modified-Since`. When an HTTP 304 (Not Modified) response is received, the downloader signals that the target is current, enabling the pipeline to skip redundant downloading, extraction, and downstream processing.
+4. **Archive Extensibility**:
+   * Support standard archive formats (ZIP, `.tar.gz`, `.gz`) extracted cleanly to the target directory.
+
+#### Consequences
+* **Positive**:
+  * Predictable, bounded memory consumption even when ingesting massive data files.
+  * Resilience against common network and redirect scenarios.
+  * Significant bandwidth and compute savings through HTTP 304 caching.
+* **Negative / Trade-offs**:
+  * Requires downstream tasks to support conditional execution or early-exit signals when a download is skipped via cache.
 
 ---
 
