@@ -11,10 +11,11 @@ class Rettle
   class Task
     extend Forwardable
 
-    def initialize(type:, name:, network: :queue, watchdog_fd:)
+    def initialize(type:, name:, network: :queue, watchdog_fd:, on_failure: nil)
       @type = type
       @name = name
       @watchdog_fd = watchdog_fd
+      @on_failure = on_failure
       # extract task is not recv
       @network = Network.new(type: network) if type != :extract
 
@@ -45,8 +46,9 @@ class Rettle
     def run
       @thread = Thread.new do
         @proc.call
-      rescue => e
+      rescue Exception => e # Notify the supervisor even for non-StandardError task failures.
         @error = e
+        @on_failure&.call(e)
         @watchdog_fd.write("1")
         @watchdog_fd.flush
       ensure
