@@ -49,6 +49,8 @@ class Rettle
         @error = e
         @watchdog_fd.write("1")
         @watchdog_fd.flush
+      ensure
+        @network&.close_reader
       end if @proc
     end
 
