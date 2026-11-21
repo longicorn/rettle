@@ -20,11 +20,11 @@ class Rettle
 
       type_name = type.to_s[0].upcase + type.to_s[1..]
       class_name = Object.const_get("::Rettle::Task#{type_name}")
-      self.class.send(:include, class_name)
+      extend class_name
       class_name = Object.const_get("::Rettle::TaskCommon")
-      self.class.send(:include, class_name)
+      extend class_name
     end
-    attr_reader :name, :network
+    attr_reader :name, :network, :error
     attr_accessor :proc
 
     def each_recv
@@ -38,6 +38,7 @@ class Rettle
     end
 
     def send(data)
+      raise ArgumentError, "extract tasks have no input channel" unless @network
       write(data)
     end
 
@@ -45,8 +46,7 @@ class Rettle
       @thread = Thread.new do
         @proc.call
       rescue => e
-        p e
-        puts e.backtrace.join("\n")
+        @error = e
         @watchdog_fd.write("1")
         @watchdog_fd.flush
       end if @proc
@@ -55,7 +55,12 @@ class Rettle
     delegate read: :@network
     delegate write: :@network
     delegate close: :@network
-    delegate join: :@thread
-    delegate kill: :@thread
+    def join
+      @thread&.join
+    end
+
+    def kill
+      @thread&.kill
+    end
   end
 end

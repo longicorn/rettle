@@ -63,7 +63,7 @@ Pipelines stream data continuously from extract tasks through multiple transform
 #### Decision
 All inter-task communication is abstracted through the `Rettle::Network` channel layer:
 1. **Bounded Buffer**: By default, in-memory channels utilize Ruby's `SizedQueue` with a fixed buffer size (`QUEUE_SIZE = 256`).
-2. **Automatic Backpressure**: When a downstream queue reaches capacity, the sending task's `Task#send` call blocks automatically until space becomes available.
+2. **Automatic Backpressure**: When a downstream queue reaches capacity, the destination task's `Task#send` call blocks automatically until space becomes available.
 3. **IPC Channel Support**: For scenarios spanning process boundaries or file-descriptor-based communication, `Network` provides an alternative `:pipe` mode using Unix `IO.pipe` with hex-encoded `Marshal` serialization.
 4. **Lifecycle Signaling**: Upstream tasks signal stream completion by closing downstream network channels upon exiting their execution block, which delivers an explicit end-of-stream signal (`nil`) to downstream `Task#each_recv` iterators.
 
@@ -85,8 +85,8 @@ In a distributed or concurrent ETL pipeline, if an individual task fails (e.g., 
 #### Decision
 Rettle implements a fail-fast supervision model mediated by an IPC watchdog pipe:
 1. **Watchdog File Descriptor**: A dedicated IPC pipe (`@watchdog_fd`) is initialized at pipeline startup and passed to all tasks.
-2. **Immediate Alerting**: If an unhandled exception occurs inside any task's execution block, the task catches the error, writes an alert flag (`"1"`) to the watchdog pipe, and logs the exception.
-3. **Fail-Fast Termination**: The main supervisor monitors the watchdog pipe. Upon receiving an alert signal, it immediately terminates the entire pipeline (killing active threads/processes) and raises an error, ensuring that no further partial data processing occurs.
+2. **Immediate Alerting**: If an unhandled exception occurs inside any task's execution block, the task catches the error, writes an alert flag (`"1"`) to the watchdog pipe, and retains the exception.
+3. **Fail-Fast Termination**: The main supervisor monitors the watchdog pipe. Upon receiving an alert signal, it immediately terminates the entire pipeline (killing active threads/processes) and re-raises the original exception to the caller, ensuring that no further partial data processing occurs.
 
 #### Consequences
 * **Positive**:

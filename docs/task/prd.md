@@ -16,7 +16,7 @@ Rettle follows a code-first development approach where core functionality was in
 ### 1.3 Core Concept: Task as an Abstract Processing Unit
 A `Task` encapsulates:
 * **Role-Specific Processing**: Executing user-provided logic defined for a specific phase (`extract`, `transform`, or `load`).
-* **Streaming Communication**: Pulling incoming items via `each_recv` and streaming outgoing items via `send`.
+* **Streaming Communication**: Pulling incoming items via `each_recv` and sending items to destination tasks via `send`.
 * **Domain Helpers**: Reusable routines tailored to ETL operations (e.g., download, decompression, character encoding conversion, buffered export).
 * **Execution Boundary**: An independent execution context whose execution mechanics (currently `Thread`) can be varied without changing user-facing pipeline definitions.
 
@@ -31,7 +31,7 @@ Tasks are dynamically composed using Ruby module inclusion based on their `type`
   * Origin of the pipeline. Does not receive incoming data (`@network` is omitted).
   * Built-in helpers: `download(url:, dir:, cleanup:)`, `git_clone(url:, dir:)`, automatic ZIP expansion (`after_download`), and overridable `downloader`.
 * **`TaskTransform` (`:transform`)**:
-  * Intermediate processing node. Receives data from upstream tasks via `each_recv` and pushes transformed data to downstream tasks via `send`.
+  * Intermediate processing node. Receives data from upstream tasks via `each_recv` and sends transformed data to destination tasks obtained from `connect`.
 * **`TaskLoad` (`:load`)**:
   * Terminal node of the pipeline. Ingests data and persists it into targets (databases, files, remote storage).
   * Built-in helpers: `export(data:, size:, flush:)` for buffered batching and customizable `exporter(data)`.
@@ -45,7 +45,7 @@ Task-to-task communication is mediated by the `Rettle::Network` abstraction, pro
 ### 2.3 Execution & Watchdog
 * **Concurrency Mechanism**: Each task is initiated within an independent Ruby `Thread` via `Task#run`.
 * **Lifecycle Delegation**: `Task` delegates thread management methods (`join`, `kill`) to its internal `@thread`.
-* **Watchdog Supervision**: An IPC watchdog pipe (`@watchdog_fd`) monitors task health. If any task encounters an unhandled exception, it writes an alert flag (`"1"`) to the watchdog pipe, triggering an immediate fail-fast termination of the entire Rettle process to avoid partial or corrupted pipeline states.
+* **Watchdog Supervision**: An IPC watchdog pipe (`@watchdog_fd`) monitors task health. If any task encounters an unhandled exception, it writes an alert flag (`"1"`) to the watchdog pipe, triggering an fail-fast termination of the other task threads and propagation of the exception to the caller to avoid partial or corrupted pipeline states.
 
 ---
 
@@ -92,14 +92,14 @@ flowchart TD
 
 ### 4.2 Stream Processing & Channel Management
 * **FR-4**: `Task#each_recv` must iterate over incoming data items until an end-of-stream indicator (`nil`) is encountered.
-* **FR-5**: `Task#send` must transmit data items to downstream task network channels.
-* **FR-6**: `Rettle#connect` must yield designated target tasks and guarantee that all connection channels are closed upon block exit.
+* **FR-5**: `Task#send` writes an item to that destination task’s inbound channel; extract tasks have no inbound channel.
+* **FR-6**: `Rettle#connect` must yield designated target tasks and close destination channels even if the block raises.
 
 ### 4.3 Task Helpers
-* **FR-7 (Extract)**: Must support URL downloading with optional automatic cleanup, directory preparation, and automatic decompression of ZIP archives.
-* **FR-8 (Extract)**: Must support Git repository cloning and pull synchronization.
-* **FR-9 (Common)**: Must support file encoding conversion to UTF-8 via temporary file swapping.
-* **FR-10 (Load)**: Must provide an in-memory buffer (`export`) that automatically triggers batch flushing (`exporter`) when the buffer threshold is reached or when explicitly flushed.
+* **FR-7 (Extract)**: Must support URL downloading with optional automatic cleanup, directory preparation, and automatic decompression of ZIP archives, including stored entries and filenames containing colons. A directory is required.
+* **FR-8 (Extract)**: Must support Git repository cloning and pull synchronization, preserving dots in repository names.
+* **FR-9 (Common)**: Must support file encoding conversion to the requested encoding (UTF-8 by default) via temporary file swapping; callers can specify the source encoding (default: Ruby external encoding).
+* **FR-10 (Load)**: Must provide an in-memory buffer (`export`) that automatically triggers batch flushing (`exporter`) when the buffer threshold is reached or when explicitly flushed; `false` is a valid item and `nil` means no item.
 
 ### 4.4 Supervision & Lifecycle
 * **FR-11**: Must support concurrent task startup (`run`), synchronous waiting (`join`), and termination (`kill`).
@@ -114,7 +114,7 @@ flowchart TD
 * **Low Latency Hand-off**: Data passing between tasks must minimize serialization overhead when running in shared-memory environments.
 
 ### 5.2 Reliability & Fault Tolerance
-* **Fail-Fast Termination**: The failure of an individual task must not leave the pipeline in a hung or zombie state; the watchdog mechanism must guarantee immediate process-wide teardown.
+* **Fail-Fast Termination**: The failure of an individual task must not leave the pipeline in a hung or zombie state; the watchdog mechanism must guarantee termination of the other task threads and propagation of the task exception to the caller.
 * **Idempotent Resource Cleanup**: Network channels and intermediate files (such as download working directories) must support safe, idempotent cleanup.
 
 ### 5.3 Maintainability & Compatibility

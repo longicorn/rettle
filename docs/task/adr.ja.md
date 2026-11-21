@@ -105,3 +105,8 @@ Rettle は IPC Watchdog パイプによるフェイルファスト（Fail-Fast�
   * `lib/rettle/task.rb` (Task ライフサイクルと抽象化)
   * `lib/rettle/task_common.rb`, `lib/rettle/task_extract.rb`, `lib/rettle/task_transform.rb`, `lib/rettle/task_load.rb`
   * `lib/rettle/network.rb` (チャネル抽象化とバックプレッシャー)
+
+
+## 接続と障害通知の補足
+
+`connect`が返す宛先タスクへの`send`は、その入力チャネルに書き込みます。タスクの失敗時は他のタスクを停止し、元の例外を`run`の呼び出し元に伝えます。
