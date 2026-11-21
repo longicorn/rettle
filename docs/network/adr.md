@@ -120,3 +120,19 @@ In streaming ETL pipelines, downstream tasks must terminate cleanly when upstrea
   * Automatic, predictable resource cleanup without hanging threads or abandoned pipes.
 * **Negative**:
   * Requires strict adherence to the Single Input Principle (one writer connection per channel) to prevent premature channel closure before all upstream producers complete.
+
+## ADR-NET-005: Channel validation and stream errors
+
+### Status
+Accepted
+
+### Decision
+Only `:queue` and `:pipe` are valid transports. Reject `nil` writes because `nil` signals EOF. Close the pipe reader on EOF, after draining buffered frames. Raise `Rettle::Network::ProtocolError` for invalid or truncated frames and `Rettle::Network::ClosedChannelError` for a broken pipe. Writer closure remains separate so consumers can drain the stream.
+
+## ADR-NET-006: Reader cancellation and closed writes
+
+### Status
+Accepted
+
+### Decision
+Keep `close` as writer closure so buffered data can drain. Provide `close_reader` for cancellation; receiving tasks invoke it on termination, and pipe protocol errors close the reader. Writes to a closed channel raise `ClosedChannelError` for both transports. Invalid serialized payloads raise `ProtocolError`.
