@@ -1,10 +1,22 @@
 # frozen_string_literal: true
 
+require "logger"
 require_relative "rettle/version"
 require_relative "rettle/task"
 
 class Rettle
-  def initialize(network: :queue)
+  class << self
+    attr_accessor :logger
+
+    def default_logger
+      @default_logger ||= Logger.new($stdout, level: Logger::INFO)
+    end
+  end
+
+  attr_reader :logger
+
+  def initialize(network: :queue, logger: nil)
+    @logger = logger || Rettle.logger || Rettle.default_logger
     @tasks = {}
     @network = network
     @startup_lock = Mutex.new
@@ -22,7 +34,7 @@ class Rettle
   end
 
   def define_task(type, name)
-    task = Task.new(type: type, name: name, network: @network, watchdog_fd: @wdw, on_failure: method(:record_failure))
+    task = Task.new(type: type, name: name, network: @network, watchdog_fd: @wdw, on_failure: method(:record_failure), logger: @logger)
     raise "Task #{name} already exists" if @tasks.key?(name)
     @tasks[name] = task
 
@@ -36,6 +48,7 @@ class Rettle
   end
 
   def connect(task_names)
+    @logger.debug { "[Rettle] Connecting tasks: #{Array(task_names).join(", ")}" }
     tasks = Array(task_names).each_with_object({}){|name, hash| hash[name] = @tasks[name]}
     if block_given?
       begin
@@ -52,11 +65,18 @@ class Rettle
   end
 
   def run
+    @logger.info { "[Rettle] Pipeline started" }
     @setup_proc&.call
-    @startup_lock.synchronize { @tasks.values.each(&:run) }
+    @startup_lock.synchronize do
+      @tasks.values.each do |task|
+        @logger.debug { "[Rettle] Starting task #{task.name}" }
+        task.run
+      end
+    end
     @tasks.values.each(&:join)
     error = @error_lock.synchronize { @first_error }
     raise error if error
+    @logger.info { "[Rettle] Pipeline completed" }
   ensure
     @watchdog.kill if @watchdog&.alive?
     @watchdog&.join
@@ -75,6 +95,7 @@ class Rettle
     @watchdog = Thread.new do
       rs, _, = IO.select([@wdr])
       if r = rs[0]
+        @logger.warn { "[Rettle] Watchdog stopping tasks after failure" }
         @startup_lock.synchronize { @tasks.values.each(&:kill) }
       end
     end

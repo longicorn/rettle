@@ -6,12 +6,15 @@ require_relative "task_extract"
 require_relative "task_transform"
 require_relative "task_load"
 require 'forwardable'
+require_relative "logger"
 
 class Rettle
   class Task
     extend Forwardable
 
-    def initialize(type:, name:, network: :queue, watchdog_fd:, on_failure: nil)
+    def initialize(type:, name:, network: :queue, watchdog_fd:, on_failure: nil, logger: nil)
+      logger ||= Rettle.respond_to?(:default_logger) ? Rettle.default_logger : Logger.new($stdout, level: Logger::INFO)
+      @logger_proxy = TaskLoggerProxy.new(logger, type: type, name: name)
       @type = type
       @name = name
       @watchdog_fd = watchdog_fd
@@ -27,6 +30,12 @@ class Rettle
     end
     attr_reader :name, :network, :error
     attr_accessor :proc
+
+    def logger(message = nil, positional_level = nil, level: :info, &block)
+      return @logger_proxy if message.nil? && !block && positional_level.nil?
+
+      @logger_proxy.public_send(positional_level || level, message, &block)
+    end
 
     def each_recv
       if block_given?
@@ -48,6 +57,7 @@ class Rettle
         @proc.call
       rescue Exception => e # Notify the supervisor even for non-StandardError task failures.
         @error = e
+        logger.error { "Task failed: #{e.class}: #{e.message}\n#{e.backtrace&.join("\n")}" }
         @on_failure&.call(e)
         @watchdog_fd.write("1")
         @watchdog_fd.flush
