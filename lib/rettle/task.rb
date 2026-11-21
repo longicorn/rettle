@@ -12,9 +12,11 @@ class Rettle
   class Task
     extend Forwardable
 
-    def initialize(type:, name:, network: :queue, watchdog_fd:, on_failure: nil, logger: nil)
+    def initialize(type:, name:, network: :queue, watchdog_fd:, on_failure: nil, logger: nil, report_dispatch: nil, execution_id: nil)
       logger ||= Rettle.respond_to?(:default_logger) ? Rettle.default_logger : Logger.new($stdout, level: Logger::INFO)
       @logger_proxy = TaskLoggerProxy.new(logger, type: type, name: name)
+      @report_dispatch, @execution_id = report_dispatch, execution_id
+      @metrics = {}
       @type = type
       @name = name
       @watchdog_fd = watchdog_fd
@@ -52,16 +54,31 @@ class Rettle
       write(data)
     end
 
+    def report(metrics = {}, **metadata)
+      @metrics.merge!(metrics).merge!(metadata)
+    end
+
     def run
       @thread = Thread.new do
+        started = Time.now
+        clock = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+        @report_dispatch&.call(:report_task_start, @execution_id.call, @type, @name, started)
+        status = :failed
         @proc.call
+        status = :success
       rescue Exception => e # Notify the supervisor even for non-StandardError task failures.
+        status = :failed
         @error = e
         logger.error { "Task failed: #{e.class}: #{e.message}\n#{e.backtrace&.join("\n")}" }
         @on_failure&.call(e)
         @watchdog_fd.write("1")
         @watchdog_fd.flush
       ensure
+        if clock
+          status ||= :failed
+          duration = Process.clock_gettime(Process::CLOCK_MONOTONIC) - clock
+          @report_dispatch&.call(:report_task_finish, @execution_id.call, @name, status, Time.now, duration, metrics: @metrics.dup, error: @error)
+        end
         @network&.close_reader
       end if @proc
     end

@@ -1,12 +1,22 @@
 # frozen_string_literal: true
 
 require "logger"
+require "securerandom"
+require_relative "rettle/reporter"
 require_relative "rettle/version"
 require_relative "rettle/task"
 
 class Rettle
   class << self
     attr_accessor :logger
+
+    def configuration
+      @configuration ||= Configuration.new
+    end
+
+    def configure
+      yield configuration
+    end
 
     def default_logger
       @default_logger ||= Logger.new($stdout, level: Logger::INFO)
@@ -15,8 +25,11 @@ class Rettle
 
   attr_reader :logger
 
-  def initialize(network: :queue, logger: nil)
+  def initialize(network: :queue, logger: nil, reporter: nil, config: nil, context: {})
     @logger = logger || Rettle.logger || Rettle.default_logger
+    config ||= Rettle.configuration
+    @reporter = reporter || config.reporter || (config.report_model ? Reporter::ActiveRecordReporter.new(config.report_model, async: config.report_async, max_queue_size: config.max_queue_size, logger: @logger) : Reporter::LoggerReporter.new(@logger))
+    @context = context
     @tasks = {}
     @network = network
     @startup_lock = Mutex.new
@@ -34,7 +47,7 @@ class Rettle
   end
 
   def define_task(type, name)
-    task = Task.new(type: type, name: name, network: @network, watchdog_fd: @wdw, on_failure: method(:record_failure), logger: @logger)
+    task = Task.new(type: type, name: name, network: @network, watchdog_fd: @wdw, on_failure: method(:record_failure), logger: @logger, report_dispatch: method(:dispatch_report), execution_id: -> { @execution_id })
     raise "Task #{name} already exists" if @tasks.key?(name)
     @tasks[name] = task
 
@@ -65,6 +78,8 @@ class Rettle
   end
 
   def run
+    @execution_id = SecureRandom.uuid
+    dispatch_report(:report_pipeline_start, @execution_id, @context)
     @logger.info { "[Rettle] Pipeline started" }
     @setup_proc&.call
     @startup_lock.synchronize do
@@ -77,7 +92,12 @@ class Rettle
     error = @error_lock.synchronize { @first_error }
     raise error if error
     @logger.info { "[Rettle] Pipeline completed" }
+    dispatch_report(:report_pipeline_finish, @execution_id, :success)
+  rescue Exception => e
+    dispatch_report(:report_pipeline_finish, @execution_id, :failed, error: e)
+    raise
   ensure
+    dispatch_report(:flush, timeout: 5)
     @watchdog.kill if @watchdog&.alive?
     @watchdog&.join
     @wdr&.close unless @wdr&.closed?
@@ -85,6 +105,13 @@ class Rettle
   end
 
   private
+
+  def dispatch_report(method, *args, **kwargs)
+    @reporter.public_send(method, *args, **kwargs)
+  rescue StandardError => e
+    @logger.error { "[Rettle][Report] #{e.class}: #{e.message}" }
+    nil
+  end
 
   def record_failure(error)
     @error_lock.synchronize { @first_error ||= error }
