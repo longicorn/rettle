@@ -2,12 +2,14 @@ PATH
   remote: .
   specs:
     rettle (0.6.4)
+      logger
       nkf
 
 GEM
   remote: https://rubygems.org/
   specs:
-    minitest (5.25.4)
+    logger (1.7.0)
+    minitest (5.27.0)
     nkf (0.2.0)
     rake (13.2.1)
 
