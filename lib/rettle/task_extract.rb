@@ -3,16 +3,18 @@
 require 'pathname'
 require 'fileutils'
 require 'net/http'
+require 'open3'
 
 class Rettle
   module TaskExtract
     class UndefinedError < StandardError; end
 
-    def after_download(pathname, dir: dir)
-      case `file #{pathname.to_s}`
+    def after_download(pathname, dir: nil)
+      case Open3.capture2("file", "--", pathname.to_s).first
       when /Zip archive data/io
-        ret = `unzip -o #{pathname.to_s} 2>/dev/null`
-        ret.lines.select{|v|v.match?(/inflating:/)}.map{|v|v.strip.split(':')[-1].strip}
+        ret, status = Open3.capture2("unzip", "-o", pathname.to_s)
+        raise "unzip failed" unless status.success?
+        ret.lines.filter_map { |line| line.match(/^\s*(?:inflating|extracting):\s*(.*)$/)&.[](1)&.strip }
       else
         pathname.to_s
       end
@@ -23,7 +25,7 @@ class Rettle
     end
 
     def download(url: nil, dir: nil, cleanup: true)
-      raise if dir&.nil?
+      raise ArgumentError, "dir must not be nil" if dir.nil?
 
       FileUtils.rm_rf(dir) if cleanup
       FileUtils.mkdir_p(dir)
@@ -46,13 +48,13 @@ class Rettle
       return download_files.flatten.compact.map{|f| File.join(dir, f)}
     end
 
-    def git_clone(url: url, dir: nil)
+    def git_clone(url:, dir: nil)
       FileUtils.mkdir_p(dir)
-      repo = url.split('/').last.split('.').first
+      repo = url.split('/').last.sub(/\.git\z/, '')
       Dir.chdir(dir) do
-        `git clone #{url} 1>/dev/null 2>&1` unless Dir.exist?(repo)
+        system("git", "clone", "--", url, out: File::NULL, err: File::NULL) || raise("git clone failed") unless Dir.exist?(repo)
         Dir.chdir(repo) do
-          `git pull 1>/dev/null 2>&1`
+          system("git", "pull", out: File::NULL, err: File::NULL) || raise("git pull failed")
         end
       end
 

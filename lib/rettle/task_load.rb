@@ -3,7 +3,7 @@
 class Rettle
   module TaskLoad
     def exporter(data)
-      raise UndefinedError
+      raise NotImplementedError, "define an exporter for this task"
     end
 
     def export(data: nil, size: 1000, flush: false)

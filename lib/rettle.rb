@@ -7,6 +7,7 @@ class Rettle
   def initialize(network: :queue)
     @tasks = {}
     @network = network
+    @startup_lock = Mutex.new
     setup_watchdog
   end
 
@@ -35,8 +36,11 @@ class Rettle
   def connect(task_names)
     tasks = Array(task_names).each_with_object({}){|name, hash| hash[name] = @tasks[name]}
     if block_given?
-      yield tasks
-      tasks.values.each(&:close)
+      begin
+        yield tasks
+      ensure
+        tasks.values.each(&:close)
+      end
     end
   end
 
@@ -47,16 +51,15 @@ class Rettle
 
   def run
     @setup_proc&.call
-    @tasks.values.each(&:run)
+    @startup_lock.synchronize { @tasks.values.each(&:run) }
     @tasks.values.each(&:join)
-    @watchdog.kill if @watchdog.alive?
-    @watchdog.join
-  rescue Interrupt
-    exit
-  rescue => e
-    p e
-    puts e.backtrace.join("\n")
-    exit
+    error = @tasks.values.filter_map(&:error).first
+    raise error if error
+  ensure
+    @watchdog.kill if @watchdog&.alive?
+    @watchdog&.join
+    @wdr&.close unless @wdr&.closed?
+    @wdw&.close unless @wdw&.closed?
   end
 
   private
@@ -66,7 +69,7 @@ class Rettle
     @watchdog = Thread.new do
       rs, _, = IO.select([@wdr])
       if r = rs[0]
-        @tasks.values.each(&:kill)
+        @startup_lock.synchronize { @tasks.values.each(&:kill) }
       end
     end
   end
