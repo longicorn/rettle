@@ -140,3 +140,9 @@ flowchart LR
    * Faster IPC alternative to anonymous pipes for independent OS processes without parent-child inheritance constraints.
 3. **Direct Binary Framing**:
    * Replace hex encoding (`pack("h*")` / `unpack("h*")`) in pipe/socket transports with direct binary 4-byte/8-byte big-endian length prefixing to halve I/O payload size and reduce CPU serialization overhead.
+
+### Current channel contract
+
+Only `:queue` and `:pipe` are supported; other types raise `ArgumentError`. `nil` is reserved for EOF and cannot be written. Pipe readers close their descriptor at EOF after buffered frames are consumed. Invalid or truncated frames raise `Rettle::Network::ProtocolError`; writes to a closed pipe reader raise `Rettle::Network::ClosedChannelError`.
+
+On invalid pipe frames, the reader is closed and `ProtocolError` is raised. A receiving task closes its pipe reader when it terminates early; callers managing a channel directly can use `close_reader` to cancel reading. Writing to a closed channel raises `ClosedChannelError` for either transport.
