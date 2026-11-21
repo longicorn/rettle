@@ -159,4 +159,36 @@ class DownloaderTest < Minitest::Test
     end
   end
 
+  def test_download_reports_each_attempt_without_url_credentials
+    t = task
+    captured = []
+    t.define_singleton_method(:report) { |data| captured << data }
+    t.define_singleton_method(:downloader) do |url:, dir:|
+      File.write(File.join(dir, 'data'), 'hello')
+      [Pathname.new('data')]
+    end
+    Dir.mktmpdir do |dir|
+      2.times { t.download(url: 'https://user:secret@example.com/data?token=secret', dir: dir) }
+    end
+    assert_equal 2, captured.last[:downloads].length
+    assert_equal 'https://example.com/data', captured.last[:downloads].last[:url]
+    assert_equal 'success', captured.last[:downloads].last[:status]
+  end
+
+  def test_git_clone_reports_revision
+    Dir.mktmpdir do |dir|
+      source = File.join(dir, 'source')
+      system('git', 'init', '-q', source, exception: true)
+      system('git', '-C', source, '-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '--allow-empty', '-qm', 'initial', exception: true)
+      t = task
+      captured = []
+      t.define_singleton_method(:report) { |data| captured << data }
+      destination = File.join(dir, 'destination')
+      2.times { t.git_clone(url: source, dir: destination) }
+      records = captured.last[:git_repositories]
+      assert_equal %w[clone pull], records.map { |entry| entry[:operation] }
+      assert_match(/\A[0-9a-f]{40,64}\z/, records.first[:revision])
+    end
+  end
+
 end

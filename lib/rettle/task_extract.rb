@@ -77,11 +77,16 @@ class Rettle
         raise if url.nil?
         pathnames = default_downloader(url: url, dir: dir, max_redirects: max_redirects, open_timeout: open_timeout, read_timeout: read_timeout, retries: retries, etag: etag, last_modified: last_modified)
       end
-      pathnames.flat_map do |pathname|
+      files = pathnames.flat_map do |pathname|
         Array(after_download(pathname, dir: dir)).map do |file|
           Pathname.new(file).absolute? ? file.to_s : File.join(dir, file.to_s)
         end
       end
+      record_extract_evidence(:downloads, { url: report_source(url), status: 'success' }.merge(@download_metadata || {}))
+      files
+    rescue StandardError
+      record_extract_evidence(:downloads, { url: report_source(url), status: 'failed' })
+      raise
     end
 
     def git_clone(url:, dir: nil)
@@ -89,12 +94,43 @@ class Rettle
       FileUtils.mkdir_p(dir)
       repo = url.split('/').last.sub(/\.git\z/, '')
       path = File.join(dir, repo)
-      system('git', '-C', dir, 'clone', '--', url, out: File::NULL, err: File::NULL) || raise('git clone failed') unless Dir.exist?(path)
+      operation = Dir.exist?(path) ? 'pull' : 'clone'
+      system('git', '-C', dir, 'clone', '--', url, out: File::NULL, err: File::NULL) || raise('git clone failed') if operation == 'clone'
       system('git', '-C', path, 'pull', out: File::NULL, err: File::NULL) || raise('git pull failed')
+      revision, status = Open3.capture2('git', '-C', path, 'rev-parse', 'HEAD', err: File::NULL)
+      evidence = { url: report_source(url), operation: operation, status: 'success' }
+      evidence[:revision] = revision.strip if status.success?
+      record_extract_evidence(:git_repositories, evidence)
       Pathname.new(path)
+    rescue StandardError
+      record_extract_evidence(:git_repositories, { url: report_source(url), operation: operation, status: 'failed' })
+      raise
     end
 
     private
+
+    def record_extract_evidence(key, evidence)
+      @extract_evidence ||= {}
+      (@extract_evidence[key] ||= []) << evidence
+      report(key => @extract_evidence[key].dup)
+    end
+
+    def report_source(source)
+      return nil if source.nil?
+      value = source.to_s
+      uri = URI.parse(value)
+      if uri.scheme && uri.host
+        uri.password = nil if uri.password
+        uri.user = nil if uri.user
+        uri.query = nil
+        uri.fragment = nil
+        uri.to_s
+      else
+        value.sub(/\A[^\/\s@]+@(?=[^\/]+:)/, '')
+      end
+    rescue URI::InvalidURIError
+      '[invalid source]'
+    end
 
     def safe_archive_path(dir, name)
       root = File.expand_path(dir)
