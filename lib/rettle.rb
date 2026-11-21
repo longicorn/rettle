@@ -8,6 +8,8 @@ class Rettle
     @tasks = {}
     @network = network
     @startup_lock = Mutex.new
+    @error_lock = Mutex.new
+    @first_error = nil
     setup_watchdog
   end
 
@@ -20,7 +22,7 @@ class Rettle
   end
 
   def define_task(type, name)
-    task = Task.new(type: type, name: name, network: @network, watchdog_fd: @wdw)
+    task = Task.new(type: type, name: name, network: @network, watchdog_fd: @wdw, on_failure: method(:record_failure))
     raise "Task #{name} already exists" if @tasks.key?(name)
     @tasks[name] = task
 
@@ -53,7 +55,7 @@ class Rettle
     @setup_proc&.call
     @startup_lock.synchronize { @tasks.values.each(&:run) }
     @tasks.values.each(&:join)
-    error = @tasks.values.filter_map(&:error).first
+    error = @error_lock.synchronize { @first_error }
     raise error if error
   ensure
     @watchdog.kill if @watchdog&.alive?
@@ -63,6 +65,10 @@ class Rettle
   end
 
   private
+
+  def record_failure(error)
+    @error_lock.synchronize { @first_error ||= error }
+  end
 
   def setup_watchdog
     @wdr, @wdw = IO.pipe

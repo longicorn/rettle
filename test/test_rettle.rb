@@ -37,4 +37,13 @@ class TestRettle < Minitest::Test
     end
     assert_raises(NotImplementedError) { task.export(data: 1, flush: true) }
   end
+  def test_first_reported_failure_is_not_selected_by_definition_order
+    etl = Rettle.new
+    first = RuntimeError.new('first reported')
+    later = RuntimeError.new('later')
+    etl.define_task(:extract, 'defined_first') { sleep 0.2; raise later }
+    etl.define_task(:extract, 'defined_second') { raise first }
+    assert_same first, assert_raises(RuntimeError) { Timeout.timeout(3) { etl.run } }
+  end
+
 end
