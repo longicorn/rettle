@@ -1,5 +1,7 @@
 # Rettle
 
+[日本語 (Japanese)](README.ja.md)
+
 Rettle is a small experimental personal ETL framework
 
 ## Installation
@@ -111,6 +113,35 @@ etl.define_task(:load, 'load_task2') do
 end
 
 etl.run
+```
+
+### Passing Parameters & Collecting Results
+
+To maintain task isolation and prevent race conditions (especially when running under process isolation), avoid sharing variables across tasks via outer closures. Pass initial parameters using `params:` in `define_task` and collect results with `task.emit`:
+
+```ruby
+etl = Rettle.new
+
+etl.define_task(:extract, 'extract_task', params: { source_path: 'data.csv' }) do |task|
+  etl.connect('load_task') do |senders|
+    # Safely access initial parameters (isolated copy)
+    path = task.params[:source_path]
+    senders['load_task'].send("record from #{path}")
+  end
+end
+
+etl.define_task(:load, 'load_task') do |task|
+  task.each_recv do |row|
+    # Emit results to the pipeline collector without mutating external state
+    task.emit("processed: #{row}")
+  end
+end
+
+etl.run
+
+# Retrieve all aggregated results after execution
+puts etl.results
+# => ["processed: record from data.csv"]
 ```
 
 ## Rettle Helper
