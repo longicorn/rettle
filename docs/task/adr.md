@@ -31,6 +31,7 @@ In defining and refining the `Rettle::Task` subsystem, we must address key archi
 | **Pipeline Supervision & Errors** | Fail-Fast IPC Watchdog Pipe with Re-raised Exceptions | Immediate abort of peer tasks upon failure and propagation of the original exception to caller without invoking `Kernel.exit`. |
 | **Thread Safety & State Hygiene** | Complete Elimination of `Dir.chdir` and Class Mutation | Avoids process-global race conditions in multi-threaded workers (Solid Queue); attaches helpers via instance `extend`. |
 | **Downloader & Ingestion** | Chunked Disk Streaming with Redirects, Retries & Conditional Cache | Prevents OOM crashes on multi-gigabyte downloads; handles network flakiness; skips redundant processing via 304 Not Modified. |
+| **Parameters & Result Collection** | Explicit Parameter Injection & `emit` / `results` Message-Passing | Enforces strict share-nothing isolation; eliminates race conditions from shared closures; guarantees identical semantics under multi-process (`fork`) and `Ractor` execution. |
 
 ---
 
@@ -151,6 +152,37 @@ The default downloader initially relied on `Net::HTTP.get(uri)`, which reads the
   * Significant bandwidth and compute savings through HTTP 304 caching.
 * **Negative / Trade-offs**:
   * Requires downstream tasks to support conditional execution or early-exit signals when a download is skipped via cache.
+
+---
+
+### 3.6 Decision 6: Explicit Parameter Injection and Share-Nothing Result Collection via emit
+
+#### Context
+In ETL pipelines, tasks frequently require runtime configuration parameters (e.g., target endpoints, date ranges, or batch sizes) and need to return execution summaries or collected records to the caller (e.g., in unit tests or downstream job orchestrators).
+Previously, callers often relied on Ruby closures capturing outer local variables (such as `received = []` inside test definitions or tasks). While this pattern functions in shared-memory multi-threaded execution, it causes severe architectural issues:
+1. **Breakage under Process Isolation (`fork`)**: When tasks execute in separate OS processes, memory is isolated. Mutations to captured outer variables inside child processes do not propagate to the parent, silently breaking tests and application logic upon process termination.
+2. **Race Conditions in Multi-Threading**: Unsynchronized writes to shared closures across concurrently running task threads introduce race conditions and non-deterministic behavior.
+3. **Violation of Encapsulation**: Implicit closure captures couple task definitions tightly to the enclosing scope, hindering reusability and execution backend flexibility.
+
+#### Decision
+1. **Strict Prohibition of Shared Mutable State**: Formally disallow implicit closure mutations across task boundaries and between tasks and the pipeline caller. Treat tasks as share-nothing processing units communicating strictly via message passing.
+2. **Explicit Parameter Injection**:
+   * Allow supplying initial parameters explicitly when defining tasks (e.g., `define_task(:name, params: { ... })`).
+   * Expose parameters within the task execution block via a clean instance accessor (`task.params`), eliminating the need to capture mutable external variables.
+3. **Parent-Facing Channel via `task.emit`**:
+   * Introduce a `task.emit(payload)` method enabling tasks to transmit result payloads back to the pipeline supervisor.
+   * Back this communication channel with existing `Rettle::Network` primitives (thread-safe bounded queues in thread mode, IPC pipes with serialization in process/fork mode).
+4. **Result Aggregation into `etl.results`**:
+   * Upon pipeline completion (`run` / `run!`), the pipeline supervisor collects all emitted payloads from all tasks and exposes them via `etl.results`.
+
+#### Consequences
+* **Positive**:
+  * **Unified Semantics across Concurrency Backends**: Pipelines and test suites behave identically whether executing via `Thread`, `fork`, or `Ractor`.
+  * **Elimination of Concurrency Bugs**: No race conditions or silent data loss from unsynchronized shared memory writes.
+  * **Clean Testing Ergonomics**: Unit and integration tests can inspect pipeline execution results via `etl.results` without declaring dummy accumulator arrays.
+* **Negative / Trade-offs**:
+  * Payloads sent via `task.emit` must be serializable (e.g., via `Marshal`) to support multi-process execution.
+  * Existing tests or pipelines relying on outer variable mutations must be refactored to use `params` and `task.emit`.
 
 ---
 
