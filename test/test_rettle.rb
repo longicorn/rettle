@@ -6,16 +6,31 @@ require "tmpdir"
 class TestRettle < Minitest::Test
   def test_pipeline_and_role_isolation
     etl = Rettle.new
-    received = []
-    extract = etl.define_task(:extract, 'extract') do
+    etl.define_task(:extract, 'extract') do
       etl.connect('load') { |tasks| tasks['load'].send('item') }
     end
-    load = etl.define_task(:load, 'load') { |task| task.each_recv { |item| received << item } }
+    etl.define_task(:load, 'load') { |task| task.each_recv { |item| task.emit(item) } }
     # define_task with a block returns its assignment, so inspect via a separate blockless task.
     other = etl.define_task(:extract, 'other')
     refute_respond_to other, :export
     Timeout.timeout(3) { etl.run }
-    assert_equal ['item'], received
+    assert_equal ['item'], etl.results
+  end
+
+  def test_params_and_results_with_both_transports
+    [:queue, :pipe].each do |transport|
+      etl = Rettle.new(network: transport)
+      params = { values: [1, 2] }
+      etl.define_task(:extract, 'source', params: params) do |task|
+        task.params[:values] << 3
+        300.times { |i| task.emit(i) }
+        task.emit(nil)
+        task.emit(task.params)
+      end
+      Timeout.timeout(5) { etl.run }
+      assert_equal [1, 2], params[:values]
+      assert_equal (0...300).to_a + [nil, { values: [1, 2, 3] }], etl.results
+    end
   end
 
   def test_failure_propagates_and_stops_blocked_tasks
@@ -37,13 +52,12 @@ class TestRettle < Minitest::Test
     end
     assert_raises(NotImplementedError) { task.export(data: 1, flush: true) }
   end
+
   def test_first_reported_failure_is_not_selected_by_definition_order
     etl = Rettle.new
-    first = RuntimeError.new('first reported')
-    later = RuntimeError.new('later')
-    etl.define_task(:extract, 'defined_first') { sleep 0.2; raise later }
-    etl.define_task(:extract, 'defined_second') { raise first }
-    assert_same first, assert_raises(RuntimeError) { Timeout.timeout(3) { etl.run } }
+    etl.define_task(:extract, 'defined_first', params: { message: 'later' }) { |task| sleep 0.2; raise task.params[:message] }
+    etl.define_task(:extract, 'defined_second', params: { message: 'first reported' }) { |task| raise task.params[:message] }
+    error = assert_raises(RuntimeError) { Timeout.timeout(3) { etl.run } }
+    assert_equal 'first reported', error.message
   end
-
 end

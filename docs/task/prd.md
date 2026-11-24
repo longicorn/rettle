@@ -20,6 +20,7 @@ A `Task` encapsulates:
 * **Streaming Communication**: Pulling incoming items via `each_recv` and sending items to destination tasks via `send`.
 * **Domain Helpers**: Reusable routines tailored to ETL operations (e.g., streaming download, decompression, character encoding conversion, buffered export).
 * **Execution Boundary**: An independent execution context whose execution mechanics (currently `Thread`) can be varied without changing user-facing pipeline definitions.
+* **Share-Nothing Boundary**: Receives explicit input parameters at definition and emits collected outputs via message-passing channels without mutating or capturing external shared closures, ensuring readiness for process-isolated and multi-threaded execution alike.
 
 ---
 
@@ -52,6 +53,12 @@ Task-to-task communication is mediated by the `Rettle::Network` abstraction, pro
   2. The supervisor halts the other tasks in the pipeline cleanly.
   3. The supervisor re-raises the original exception to the caller (`Rettle#run` / `run!`).
   4. The library never calls `exit`, allowing enclosing job runners (ActiveJob, Rake, test suites) to retry, log, or alert normally.
+
+### 2.4 Task Parameters & Result Collection (`emit` / `results`)
+To guarantee execution integrity across process boundaries (`fork`) and eliminate race conditions from shared closures:
+* **Explicit Parameter Injection**: Tasks accept initial parameters explicitly via `define_task(name, params: { ... })`, accessible within the task execution block, eliminating dependency on captured external variables.
+* **Output Emission (`task.emit`)**: Tasks can communicate completion status or summary outputs back to the pipeline supervisor using `task.emit(payload)`. This utilizes a dedicated parent-facing communication channel backed by `Rettle::Network` primitives (thread queue or IPC pipe).
+* **Result Aggregation (`etl.results`)**: Upon pipeline completion, the parent supervisor collects all emitted items from tasks into `etl.results`, making task execution outcomes inspectable without thread-shared mutable variables.
 
 ---
 
@@ -123,6 +130,11 @@ flowchart TD
 * **FR-14 (Phase 2 Preview - Observability & Lifecycle Hooks)**: Must provide hooks for pipeline and task events (`on_start`, `on_finish`, `on_error`) and support item processed counters.
 * **FR-15 (Phase 2 Preview - Configuration & Error Hierarchy)**: Must allow configuring logger instances (e.g., `Rails.logger`), queue buffer size (`queue_size`), and provide standardized exceptions under `Rettle::Error` (e.g., `Rettle::UndefinedError`).
 
+### 4.5 Task Parameters & Result Collection
+* **FR-16 (Explicit Parameter Injection)**: `define_task` must accept initial parameters (`params: ...`) and make them accessible inside the task block, removing the need to capture mutable external closures.
+* **FR-17 (Result Emission & Aggregation)**: `Task#emit` must allow tasks to transmit arbitrary serializable result data to the parent pipeline. The pipeline supervisor must collect emitted payloads and expose them via `etl.results` upon completion.
+* **FR-18 (Strict Share-Nothing Communication)**: Tasks must not communicate across task boundaries or with the caller via shared in-memory variables. All data exchange must proceed via streaming channels (`Network`) or result emission (`emit`).
+
 ---
 
 ## 5. Non-Functional Requirements
@@ -134,6 +146,7 @@ flowchart TD
 
 ### 5.2 Reliability & Fault Tolerance
 * **Process-Global State Hygiene (Thread-Safety)**: Task helpers must never call `Dir.chdir` or mutate global process state. All path operations must be explicit and safe for concurrent execution in multi-threaded environments (e.g., Solid Queue workers).
+* **Process-Isolation Readiness & Share-Nothing Architecture**: Memory and mutable state must not be shared implicitly across tasks or with the parent pipeline, guaranteeing that pipeline behavior remains identical under thread, process-fork, and actor-based execution.
 * **Library Discipline**: Rettle must behave strictly as an embeddable library. Failures must propagate as standard Ruby exceptions rather than halting the Ruby VM via `exit`.
 * **Fail-Fast Termination**: The failure of an individual task must not leave the pipeline in a hung or zombie state; the watchdog mechanism must guarantee termination of peer task threads and propagation of the task exception to the caller.
 * **Idempotent Resource Cleanup**: Network channels and intermediate files (such as download working directories) must support safe, idempotent cleanup.
