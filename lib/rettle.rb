@@ -23,7 +23,7 @@ class Rettle
     end
   end
 
-  attr_reader :logger
+  attr_reader :logger, :results
 
   def initialize(network: :queue, logger: nil, reporter: nil, config: nil, context: {})
     @logger = logger || Rettle.logger || Rettle.default_logger
@@ -31,9 +31,11 @@ class Rettle
     @reporter = reporter || config.reporter || (config.report_model ? Reporter::ActiveRecordReporter.new(config.report_model, async: config.report_async, max_queue_size: config.max_queue_size, logger: @logger) : Reporter::LoggerReporter.new(@logger))
     @context = context
     @tasks = {}
+    @results = []
     @network = network
     @startup_lock = Mutex.new
     @error_lock = Mutex.new
+    @results_lock = Mutex.new
     @first_error = nil
     setup_watchdog
   end
@@ -46,8 +48,8 @@ class Rettle
     end
   end
 
-  def define_task(type, name)
-    task = Task.new(type: type, name: name, network: @network, watchdog_fd: @wdw, on_failure: method(:record_failure), logger: @logger, report_dispatch: method(:dispatch_report), execution_id: -> { @execution_id })
+  def define_task(type, name, params: {})
+    task = Task.new(type: type, name: name, params: params, network: @network, watchdog_fd: @wdw, on_failure: method(:record_failure), logger: @logger, report_dispatch: method(:dispatch_report), execution_id: -> { @execution_id })
     raise "Task #{name} already exists" if @tasks.key?(name)
     @tasks[name] = task
 
@@ -78,10 +80,18 @@ class Rettle
   end
 
   def run
+    @results = []
     @execution_id = SecureRandom.uuid
     dispatch_report(:report_pipeline_start, @execution_id, @context)
     @logger.info { "[Rettle] Pipeline started" }
     @setup_proc&.call
+    collectors = @tasks.values.map do |task|
+      Thread.new do
+        while (item = task.result_network.read)
+          @results_lock.synchronize { @results << Marshal.load(item[0]) }
+        end
+      end
+    end
     @startup_lock.synchronize do
       @tasks.values.each do |task|
         @logger.debug { "[Rettle] Starting task #{task.name}" }
@@ -89,6 +99,8 @@ class Rettle
       end
     end
     @tasks.values.each(&:join)
+    @tasks.values.each { |task| task.result_network.close }
+    collectors.each(&:join)
     error = @error_lock.synchronize { @first_error }
     raise error if error
     @logger.info { "[Rettle] Pipeline completed" }
@@ -97,6 +109,10 @@ class Rettle
     dispatch_report(:report_pipeline_finish, @execution_id, :failed, error: e)
     raise
   ensure
+    if collectors
+      @tasks.values.each { |task| task.result_network.close }
+      collectors.each(&:join)
+    end
     dispatch_report(:flush, timeout: 5)
     @watchdog.kill if @watchdog&.alive?
     @watchdog&.join

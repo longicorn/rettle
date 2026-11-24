@@ -12,11 +12,13 @@ class Rettle
   class Task
     extend Forwardable
 
-    def initialize(type:, name:, network: :queue, watchdog_fd:, on_failure: nil, logger: nil, report_dispatch: nil, execution_id: nil)
+    def initialize(type:, name:, params: {}, network: :queue, watchdog_fd:, on_failure: nil, logger: nil, report_dispatch: nil, execution_id: nil)
       logger ||= Rettle.respond_to?(:default_logger) ? Rettle.default_logger : Logger.new($stdout, level: Logger::INFO)
       @logger_proxy = TaskLoggerProxy.new(logger, type: type, name: name)
       @report_dispatch, @execution_id = report_dispatch, execution_id
       @metrics = {}
+      @params = Marshal.load(Marshal.dump(params))
+      @result_network = Network.new(type: network)
       @type = type
       @name = name
       @watchdog_fd = watchdog_fd
@@ -30,7 +32,7 @@ class Rettle
       class_name = Object.const_get("::Rettle::TaskCommon")
       extend class_name
     end
-    attr_reader :name, :network, :error
+    attr_reader :name, :network, :error, :params, :result_network
     attr_accessor :proc
 
     def logger(message = nil, positional_level = nil, level: :info, &block)
@@ -52,6 +54,10 @@ class Rettle
     def send(data)
       raise ArgumentError, "extract tasks have no input channel" unless @network
       write(data)
+    end
+
+    def emit(data)
+      @result_network.write([Marshal.dump(data)])
     end
 
     def report(metrics = {}, **metadata)
