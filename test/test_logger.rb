@@ -9,14 +9,13 @@ class LoggerTest < Minitest::Test
     Rettle.logger = Logger.new(global_io)
     local = Logger.new(local_io, level: Logger::INFO)
     pipeline = Rettle.new(logger: local)
-    evaluated = false
     pipeline.define_task(:extract, 'source') do |task|
-      task.logger.debug { evaluated = true; 'hidden' }
+      task.logger.debug { task.emit('debug evaluated'); 'hidden' }
       task.logger('hello')
       task.logger.warn('warning')
     end
     pipeline.run
-    refute evaluated
+    assert_empty pipeline.results
     assert_includes local_io.string, '[Rettle][extract:source] hello'
     assert_includes local_io.string, '[Rettle][extract:source] warning'
     assert_empty global_io.string
